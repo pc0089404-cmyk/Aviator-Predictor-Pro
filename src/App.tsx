@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AppSettings, UserStartupState } from './types/predictor';
 import { storageService, defaultSettings } from './services/storageService';
 import { firebaseSignalService } from './services/firebase';
 import { audioService } from './services/audioService';
 import { hapticsService } from './services/hapticsService';
 import { usePredictorEngine } from './hooks/usePredictorEngine';
+
 import { Header } from './components/Header';
 import { CircularMultiplier } from './components/CircularMultiplier';
 import { DashboardCoolStuff } from './components/DashboardCoolStuff';
@@ -17,403 +18,705 @@ import { StatsView } from './components/StatsView';
 import { ProfileView } from './components/ProfileView';
 import { BottomNav, TabType } from './components/BottomNav';
 import { FirstMultiplierScreen } from './components/FirstMultiplierScreen';
-import { Volume2, VolumeX, Lock, X } from 'lucide-react';
 
-export default function App() {
-  const [settings, setSettings] = useState<AppSettings>(() => storageService.getSettings());
-  const [startupState, setStartupState] = useState<UserStartupState>(() => storageService.getStartupState());
+import {
+  Volume2,
+  VolumeX,
+  Lock,
+  X,
+  ShieldCheck,
+  CheckCircle2,
+  AlertCircle,
+  CreditCard,
+  Loader2,
+} from 'lucide-react';
 
-  // Show UI page only once a day. If entered today, skip directly to Dashboard even when leaving and coming back!
-  const [hasEnteredMultiplier, setHasEnteredMultiplier] = useState<boolean>(() => {
-    return storageService.hasEnteredToday();
-  });
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
-  const [isShowingRecalibrate, setIsShowingRecalibrate] = useState<boolean>(false);
-  const [showDailyLimitModal, setShowDailyLimitModal] = useState<boolean>(false);
-  const [telegramAuth, setTelegramAuth] = useState<{
-    checked: boolean;
-    authorized: boolean;
-    role?: string;
-    user?: { id: number; firstName: string; username?: string };
-  }>({ checked: false, authorized: true });
+type TelegramUser = {
+  id: number;
+  firstName: string;
+  username?: string;
+};
 
-  // Validate Telegram Mini App Session on startup with secure server
-  useEffect(() => {
-    const tg = (window as unknown as { Telegram?: { WebApp?: { ready: () => void; expand: () => void; initData?: string } } })?.Telegram?.WebApp;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-      const initData = tg.initData;
-      if (initData) {
-        fetch('/api/auth/telegram-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ initData }),
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            if (data && data.authorized) {
-              setTelegramAuth({
-                checked: true,
-                authorized: true,
-                role: data.role,
-                user: data.user,
-              });
-            } else {
-              setTelegramAuth({
-                checked: true,
-                authorized: false,
-                role: data?.role || 'unpaid',
-                user: data?.user,
-              });
-            }
-          })
-          .catch((err) => {
-            console.warn('Telegram auth check error:', err);
-            setTelegramAuth({ checked: true, authorized: true });
-          });
-        return;
-      }
-    }
-    // Outside Telegram WebApp (e.g. browser preview), keep authorized
-    setTelegramAuth({ checked: true, authorized: true });
-  }, []);
+type TelegramAuth = {
+  checked: boolean;
+  authorized: boolean;
+  role?: string;
+  user?: TelegramUser;
+};
 
-  // Sync services with current settings
-  useEffect(() => {
-    audioService.setSoundEnabled(settings.soundEnabled);
-    audioService.setSoundType(settings.soundType);
-    hapticsService.setEnabled(settings.hapticEnabled);
-  }, [settings]);
+type WebsiteState =
+  | 'loading'
+  | 'login'
+  | 'verifying'
+  | 'verified'
+  | 'wrong'
+  | 'purchasing'
+  | 'payment-verifying'
+  | 'payment-success'
+  | 'payment-failed';
 
-  // Telemetry Engine hook
-  const {
-    currentSignal,
-    history,
-    dailyOutlook,
-    stats,
-    isTransitioning,
-    isFirebaseConnected,
-    syncSignalNow,
-  } = usePredictorEngine({
-    settings,
-    firstMultiplier: startupState.firstMultiplier,
-  });
+const USER_ID_KEY = 'aviatorPredictorWebsiteUserId';
+const REMEMBER_KEY = 'aviatorPredictorRememberUserId';
 
-  // Flow: when user verifies and enters from the First Multiplier screen
-  const handleFirstMultiplierContinue = (multiplier: number) => {
-    const updated: UserStartupState = {
-      hasCompletedStartup: true,
-      firstMultiplier: multiplier,
-      calibratedAt: Date.now(),
-    };
-    storageService.saveStartupState(updated);
-    storageService.setLastUIPageDate();
-    setStartupState(updated);
-    setHasEnteredMultiplier(true);
-    syncSignalNow();
-  };
+function VerificationAnimation({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center">
+      <div className="relative w-24 h-24 mb-6">
+        <div className="absolute inset-0 rounded-full border border-red-500/20 animate-ping" />
 
-  // Recalibration confirmation from Dashboard or Profile
-  const handleRecalibrateConfirm = (multiplier: number) => {
-    const updated: UserStartupState = {
-      ...startupState,
-      firstMultiplier: multiplier,
-      calibratedAt: Date.now(),
-    };
-    storageService.saveStartupState(updated);
-    storageService.setLastUIPageDate();
-    setStartupState(updated);
-    setIsShowingRecalibrate(false);
-    syncSignalNow();
-  };
+        <div
+          className="absolute inset-2 rounded-full border border-red-500/30 animate-spin"
+          style={{ animationDuration: '2s' }}
+        />
 
-  // Check if UI page can be opened from dashboard (only once a day)
-  const handleOpenRecalibrate = () => {
-    if (storageService.hasEnteredToday()) {
-      setShowDailyLimitModal(true);
-    } else {
-      setIsShowingRecalibrate(true);
-    }
-  };
-
-  const handleUpdateSettings = (newSettings: AppSettings) => {
-    setSettings(newSettings);
-    storageService.saveSettings(newSettings);
-    firebaseSignalService.saveAppSettings(newSettings);
-  };
-
-  const handleResetApp = () => {
-    if (window.confirm('Reset all saved settings, calibrated multiplier, and telemetry state?')) {
-      storageService.resetAllData();
-      setSettings(defaultSettings);
-      setStartupState({
-        hasCompletedStartup: false,
-        firstMultiplier: null,
-        calibratedAt: null,
-      });
-      setHasEnteredMultiplier(false);
-      setActiveTab('dashboard');
-    }
-  };
-
-  const toggleSoundShortcut = () => {
-    const updated = { ...settings, soundEnabled: !settings.soundEnabled };
-    handleUpdateSettings(updated);
-    if (updated.soundEnabled) {
-      audioService.playLockSound();
-    }
-  };
-
-  // 0. If opened in Telegram Mini App but unauthenticated / unpaid
-  if (telegramAuth.checked && !telegramAuth.authorized) {
-    return (
-      <div className="min-h-screen bg-[#060002] text-white flex flex-col items-center justify-center p-6 text-center font-sans">
-        <div className="w-16 h-16 rounded-full bg-red-950/60 border border-red-500/40 flex items-center justify-center text-red-500 mb-4 shadow-xl">
-          <Lock className="w-8 h-8" />
+        <div className="absolute inset-4 rounded-full bg-red-950/70 border border-red-500/50 flex items-center justify-center shadow-[0_0_35px_rgba(239,68,68,0.3)]">
+          <ShieldCheck className="w-9 h-9 text-red-400" />
         </div>
-        <h2 className="text-xl font-bold font-mono text-white mb-2">ACCESS RESTRICTED</h2>
-        <p className="text-xs text-zinc-400 max-w-xs mb-6 font-mono leading-relaxed">
-          Aviator Predictor Pro requires an active license. Activate your access for <b>₦2,000 NGN</b> via Paystack to unlock real-time flight telemetry.
-        </p>
-        <button
-          onClick={() => {
-            fetch('/api/paystack/initialize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ telegramUserId: telegramAuth.user?.id }),
-            })
-              .then((r) => r.json())
-              .then((d) => {
-                if (d.authorizationUrl) {
-                  window.location.href = d.authorizationUrl;
-                }
-              })
-              .catch(console.error);
-          }}
-          className="w-full max-w-xs py-3.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 active:scale-95 text-white font-bold rounded-xl shadow-lg border border-red-500/30 mb-3 transition-all cursor-pointer text-sm font-mono"
-        >
-          💳 PAY ₦2,000 VIA PAYSTACK
-        </button>
-        <a
-          href="https://t.me/AviatorPredictorPro1Bot"
-          className="text-xs text-zinc-500 hover:text-red-400 underline font-mono mt-2"
-        >
-          Return to @AviatorPredictorPro1Bot
-        </a>
+      </div>
+
+      <p className="text-sm font-mono text-zinc-300">{text}</p>
+
+      <div className="flex gap-1 mt-3">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-bounce" />
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-red-500 animate-bounce"
+          style={{ animationDelay: '120ms' }}
+        />
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-red-500 animate-bounce"
+          style={{ animationDelay: '240ms' }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function WebsiteAccessScreen({
+  state,
+  userId,
+  setUserId,
+  rememberMe,
+  setRememberMe,
+  onVerify,
+  onPurchase,
+  onEnter,
+}: {
+  state: WebsiteState;
+  userId: string;
+  setUserId: (value: string) => void;
+  rememberMe: boolean;
+  setRememberMe: (value: boolean) => void;
+  onVerify: () => void;
+  onPurchase: () => void;
+  onEnter: () => void;
+}) {
+  if (state === 'loading' || state === 'verifying') {
+    return (
+      <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-6">
+        <VerificationAnimation
+          text={
+            state === 'loading'
+              ? 'Loading secure access...'
+              : 'Verifying User ID...'
+          }
+        />
       </div>
     );
   }
 
-  // 1. App opens into UI page only if NOT entered today. If already entered today, skips directly to Dashboard!
-  if (!hasEnteredMultiplier) {
+  if (state === 'purchasing') {
     return (
-      <FirstMultiplierScreen
-        initialValue={startupState.firstMultiplier}
-        onContinue={handleFirstMultiplierContinue}
-      />
+      <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-6">
+        <VerificationAnimation text="Opening secure Paystack checkout..." />
+      </div>
     );
   }
 
-  // 2. If in recalibration view
-  if (isShowingRecalibrate) {
+  if (state === 'payment-verifying') {
     return (
-      <FirstMultiplierScreen
-        initialValue={startupState.firstMultiplier}
-        onContinue={handleRecalibrateConfirm}
-        isRecalibration={true}
-        onCancel={() => setIsShowingRecalibrate(false)}
-      />
+      <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-6">
+        <VerificationAnimation text="Verifying payment securely..." />
+      </div>
     );
   }
 
-  const isOled = settings.nightMode === 'oled';
+  if (state === 'payment-failed') {
+    return (
+      <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-5">
+        <div className="w-full max-w-sm text-center">
+          <div className="w-20 h-20 mx-auto mb-5 rounded-full bg-red-950/70 border border-red-500/50 flex items-center justify-center">
+            <AlertCircle className="w-10 h-10 text-red-400" />
+          </div>
+
+          <p className="text-xs uppercase tracking-[0.25em] text-red-400 font-bold mb-2">
+            PAYMENT NOT VERIFIED
+          </p>
+
+          <h1 className="text-2xl font-black mb-3">
+            Payment Not Completed
+          </h1>
+
+          <p className="text-sm text-zinc-400 leading-relaxed mb-6">
+            The payment could not be verified. You have not been charged access
+            unless Paystack confirms the transaction successfully.
+          </p>
+
+          <button
+            onClick={() => {
+              setUserId('');
+              window.history.replaceState({}, '', '/');
+            }}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 text-white font-bold"
+          >
+            TRY AGAIN
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'wrong') {
+    return (
+      <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-5">
+        <div className="w-full max-w-sm text-center">
+          <div className="relative w-24 h-24 mx-auto mb-6">
+            <div className="absolute inset-0 rounded-full bg-red-500/10 animate-ping" />
+
+            <div className="relative w-24 h-24 rounded-full bg-red-950/70 border border-red-500/60 flex items-center justify-center shadow-[0_0_45px_rgba(239,68,68,0.3)]">
+              <X className="w-12 h-12 text-red-400" />
+            </div>
+          </div>
+
+          <p className="text-xs uppercase tracking-[0.25em] text-red-400 font-bold mb-2">
+            ACCESS DENIED
+          </p>
+
+          <h1 className="text-2xl font-black mb-2">
+            Wrong User ID
+          </h1>
+
+          <p className="text-sm text-zinc-400 mb-7">
+            User ID not found.
+            <br />
+            Buy your User ID to access this bot.
+          </p>
+
+          <button
+            onClick={onPurchase}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 text-white font-bold shadow-[0_0_30px_rgba(239,68,68,0.2)] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+          >
+            <CreditCard className="w-5 h-5" />
+            BUY USER ID — ₦2,000
+          </button>
+
+          <button
+            onClick={() => setUserId('')}
+            className="mt-4 text-xs text-zinc-500 hover:text-white underline"
+          >
+            Try another User ID
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'verified' || state === 'payment-success') {
+    return (
+      <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-5">
+        <div className="w-full max-w-sm text-center">
+          <div className="relative w-24 h-24 mx-auto mb-6">
+            <div className="absolute inset-0 rounded-full bg-emerald-500/10 animate-ping" />
+
+            <div className="relative w-24 h-24 rounded-full bg-emerald-950/70 border border-emerald-400/50 flex items-center justify-center shadow-[0_0_45px_rgba(16,185,129,0.25)]">
+              <CheckCircle2 className="w-12 h-12 text-emerald-400" />
+            </div>
+          </div>
+
+          <p className="text-xs uppercase tracking-[0.25em] text-emerald-400 font-bold mb-2">
+            VERIFIED
+          </p>
+
+          <h1 className="text-2xl font-black text-white mb-2">
+            Aviator Predictor Pro
+          </h1>
+
+          <p className="text-sm text-zinc-400 mb-6">
+            Your User ID has been verified successfully.
+          </p>
+
+          <div className="rounded-2xl border border-red-900/60 bg-[#100103] p-5 mb-5">
+            <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">
+              YOUR USER ID
+            </p>
+
+            <p className="text-3xl font-black tracking-[0.15em] text-red-400 break-all">
+              {userId}
+            </p>
+          </div>
+
+          {state === 'payment-success' && (
+            <p className="text-xs text-emerald-400 mb-4">
+              Payment successfully verified.
+            </p>
+          )}
+
+          <p className="text-xs text-zinc-500 leading-relaxed mb-6">
+            Please save or store this User ID number and don't share it.
+            This is the User ID you will use to enter Aviator Predictor Pro
+            next time.
+          </p>
+
+          <label className="flex items-center justify-center gap-3 mb-6 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 accent-red-600"
+            />
+            <span className="text-sm text-zinc-300">Remember Me</span>
+          </label>
+
+          <button
+            onClick={onEnter}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 text-white font-bold shadow-[0_0_30px_rgba(239,68,68,0.2)] active:scale-[0.98] transition-all"
+          >
+            ENTER AVIATOR PREDICTOR PRO
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={`min-h-screen font-sans transition-colors duration-300 relative overflow-x-hidden ${
-        isOled ? 'bg-[#050001] text-white' : 'bg-[#0a0102] text-zinc-100'
-      }`}
-    >
-      {/* Background ambient red glow pools */}
-      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-96 h-64 bg-red-600/10 rounded-full blur-[130px] pointer-events-none" />
-      <div className="fixed bottom-24 right-0 w-80 h-64 bg-red-800/10 rounded-full blur-[130px] pointer-events-none" />
-
-      {/* Top Header with Real Official Aviator Logo Branding */}
-      <Header
-        onOpenRecalibrate={handleOpenRecalibrate}
-        nightMode={settings.nightMode}
-        isOnline={isFirebaseConnected}
-        isCalibratedToday={storageService.hasEnteredToday()}
-      />
-
-      {/* Main Content Area */}
-      <main className="max-w-md mx-auto px-4 pt-2 relative z-10">
-        {/* Tab 1: DASHBOARD */}
-        {activeTab === 'dashboard' && (
-          <div className="space-y-3 pb-24 animate-in fade-in duration-200">
-            {/* Quick status bar */}
-            <div className="flex items-center justify-between px-1 text-xs font-mono text-zinc-400">
-              <div className="flex items-center gap-1.5">
-                <span className="flex h-2 w-2 relative">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-                </span>
-                <span className="text-[11px] uppercase tracking-wider text-red-300 font-bold">
-                  RADAR ACTIVE · 30-50S PACING
-                </span>
-              </div>
-
-              <button
-                onClick={toggleSoundShortcut}
-                className="flex items-center gap-1.5 text-[11px] text-zinc-300 hover:text-white px-2.5 py-1 rounded-none bg-[#120103] border border-red-950 hover:border-red-800 transition-colors"
-                title="Toggle Audio"
-              >
-                {settings.soundEnabled ? (
-                  <>
-                    <Volume2 className="w-3.5 h-3.5 text-red-500" />
-                    <span>AUDIO ON</span>
-                  </>
-                ) : (
-                  <>
-                    <VolumeX className="w-3.5 h-3.5 text-zinc-500" />
-                    <span className="text-zinc-500">MUTED</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* Central Animated Loading Circle (Always showing multiplier and 'x') */}
-            <CircularMultiplier
-              signal={currentSignal}
-              isTransitioning={isTransitioning}
-              animationsEnabled={settings.animationsEnabled}
-              onManualSync={syncSignalNow}
-            />
-
-            {/* Down add cool stuff (Live Flight Trajectory Radar, Telemetry Matrix, Safe Exit Zone, Tactical Triggers) */}
-            <DashboardCoolStuff
-              signal={currentSignal}
-              isTransitioning={isTransitioning}
-              onManualSync={syncSignalNow}
-              onOpenRecalibrate={handleOpenRecalibrate}
-              isCalibratedToday={storageService.hasEnteredToday()}
-            />
-
-            {/* Footer Brand Note */}
-            <footer className="text-center pt-2 pb-1 text-[11px] font-mono text-zinc-500 space-y-0.5">
-              <div className="font-bold text-red-400">
-                AVIATOR PREDICTOR PRO · v2.9
-              </div>
-              <div className="text-[10px]">
-                Aeronautical Flight Analytics · High-Contrast Red Theme
-              </div>
-            </footer>
+    <div className="min-h-screen bg-[#050001] text-white flex items-center justify-center p-5">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div className="w-20 h-20 mx-auto mb-5 rounded-full bg-red-950/60 border border-red-500/40 flex items-center justify-center shadow-[0_0_35px_rgba(239,68,68,0.18)]">
+            <ShieldCheck className="w-9 h-9 text-red-400" />
           </div>
-        )}
 
-        {/* Tab 2: STATS */}
-        {activeTab === 'stats' && (
-          <div className="animate-in fade-in duration-200">
-            <StatsView
-              currentSignal={currentSignal}
-              stats={stats}
-              history={history}
-              dailyOutlook={dailyOutlook}
+          <p className="text-[10px] uppercase tracking-[0.3em] text-red-400 font-bold mb-2">
+            SECURE ACCESS
+          </p>
+
+          <h1 className="text-2xl font-black mb-2">
+            Aviator Predictor Pro
+          </h1>
+
+          <p className="text-sm text-zinc-400 leading-relaxed">
+            Enter your User ID Number to access the application.
+          </p>
+        </div>
+
+        <div className="rounded-3xl border border-red-950/80 bg-[#100103] p-5 shadow-[0_0_40px_rgba(239,68,68,0.08)]">
+          <label className="block text-xs font-mono uppercase tracking-wider text-zinc-400 mb-2">
+            User ID Number
+          </label>
+
+          <input
+            value={userId}
+            onChange={(e) =>
+              setUserId(e.target.value.replace(/\D/g, '').slice(0, 20))
+            }
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="Enter User ID"
+            className="w-full bg-black/50 border border-red-950 rounded-2xl px-4 py-4 text-white outline-none focus:border-red-500 transition-colors text-center tracking-[0.15em]"
+          />
+
+          <label className="flex items-center gap-3 mt-4 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 accent-red-600"
             />
-          </div>
-        )}
+            <span className="text-sm text-zinc-400">Remember Me</span>
+          </label>
 
-        {/* Tab 3: PROFILE */}
-        {activeTab === 'profile' && (
-          <div className="animate-in fade-in duration-200">
-            <ProfileView
-              settings={settings}
-              onUpdateSettings={handleUpdateSettings}
-              onResetApp={handleResetApp}
-              onOpenRecalibrate={handleOpenRecalibrate}
-            />
-          </div>
-        )}
-      </main>
+          <button
+            onClick={onVerify}
+            disabled={!userId.trim()}
+            className="w-full mt-5 py-4 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold shadow-lg active:scale-[0.98] transition-all"
+          >
+            VERIFY USER ID
+          </button>
 
-      {/* Premium 3-Tab Bottom Navigation Bar */}
-      <BottomNav
-        activeTab={activeTab}
-        onChangeTab={setActiveTab}
-      />
-
-      {/* Daily Access Limit Notice Modal */}
-      {showDailyLimitModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-full max-w-sm bg-gradient-to-b from-[#180306] via-[#100103] to-[#070001] border border-red-500/50 rounded-[32px] p-6 shadow-[0_0_50px_rgba(239,68,68,0.35)] text-center space-y-4">
-            {/* Top close icon */}
-            <button
-              onClick={() => setShowDailyLimitModal(false)}
-              className="absolute top-4 right-4 p-2 rounded-full bg-black/60 border border-red-950 text-zinc-400 hover:text-white transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            {/* Glowing Icon */}
-            <div className="w-14 h-14 mx-auto rounded-full bg-red-950/80 border border-red-500/60 flex items-center justify-center shadow-[0_0_20px_rgba(239,68,68,0.4)]">
-              <Lock className="w-7 h-7 text-red-400" />
-            </div>
-
-            <div>
-              <span className="text-[10px] font-mono uppercase tracking-widest text-red-400 font-bold px-3 py-1 rounded-full bg-red-950/60 border border-red-900/60 inline-block mb-1.5">
-                ONCE PER DAY ACCESS
-              </span>
-              <h3 className="text-lg font-black uppercase text-white tracking-tight">
-                Daily Calibration Locked
-              </h3>
-              <p className="text-xs text-zinc-300 mt-2 leading-relaxed">
-                You have already calibrated your flight multiplier for today. Even if you exit and reopen the app, you will land directly on the live dashboard.
-              </p>
-            </div>
-
-            {/* Status Pod */}
-            <div className="p-3.5 rounded-2xl bg-black/75 border border-red-950 text-left space-y-2 font-mono text-xs shadow-inner">
-              <div className="flex items-center justify-between text-zinc-400">
-                <span>Active Multiplier:</span>
-                <span className="font-bold text-red-400">
-                  {startupState.firstMultiplier ? `${startupState.firstMultiplier.toFixed(2)}x` : '2.45x'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-zinc-400">
-                <span>Today's Date:</span>
-                <span className="text-zinc-200">{storageService.getTodayDateString()}</span>
-              </div>
-              <div className="flex items-center justify-between text-zinc-400 pt-1.5 border-t border-red-950/60">
-                <span>Next Unlock:</span>
-                <span className="text-emerald-400 font-bold">Tomorrow at 00:00</span>
-              </div>
-            </div>
-
-            {/* Primary Action Button */}
-            <button
-              onClick={() => setShowDailyLimitModal(false)}
-              className="w-full py-3 rounded-full bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 active:scale-95 text-white font-mono text-xs font-bold uppercase tracking-wider shadow-lg shadow-red-950 transition-all border border-red-400/40"
-            >
-              Continue to Dashboard
-            </button>
-
-            {/* Quick Test Option to simulate next day without waiting 24h */}
-            <div className="pt-1">
-              <button
-                onClick={() => {
-                  storageService.clearLastUIPageDate();
-                  setShowDailyLimitModal(false);
-                  setIsShowingRecalibrate(true);
-                }}
-                className="text-[10px] font-mono text-zinc-500 hover:text-red-400 transition-colors underline underline-offset-2"
-              >
-                Test Next Day Unlock (Reset Daily Limit)
-              </button>
-            </div>
+          <div className="flex items-center gap-2 justify-center mt-5 text-[10px] text-zinc-600 font-mono">
+            <Lock className="w-3 h-3" />
+            Secure server-side verification
           </div>
         </div>
-      )}
+
+        <p className="text-center text-[10px] text-zinc-600 mt-6">
+          Aviator Predictor Pro · v2.9
+        </p>
+      </div>
     </div>
   );
 }
+
+export default function App() {
+  const [settings, setSettings] = useState<AppSettings>(() =>
+    storageService.getSettings()
+  );
+
+  const [startupState, setStartupState] =
+    useState<UserStartupState>(() =>
+      storageService.getStartupState()
+    );
+
+  const [hasEnteredMultiplier, setHasEnteredMultiplier] =
+    useState<boolean>(() => storageService.hasEnteredToday());
+
+  const [activeTab, setActiveTab] =
+    useState<TabType>('dashboard');
+
+  const [isShowingRecalibrate, setIsShowingRecalibrate] =
+    useState<boolean>(false);
+
+  const [showDailyLimitModal, setShowDailyLimitModal] =
+    useState<boolean>(false);
+
+  const [telegramAuth, setTelegramAuth] =
+    useState<TelegramAuth>({
+      checked: false,
+      authorized: true,
+    });
+
+  const [isTelegramMiniApp, setIsTelegramMiniApp] =
+    useState(false);
+
+  const [websiteState, setWebsiteState] =
+    useState<WebsiteState>('loading');
+
+  const [websiteUserId, setWebsiteUserId] =
+    useState('');
+
+  const [rememberMe, setRememberMe] =
+    useState(false);
+
+  /*
+   * Detect Telegram Mini App.
+   *
+   * Telegram authentication remains separate from the website
+   * User ID system.
+   */
+  useEffect(() => {
+    const tg = (
+      window as unknown as {
+        Telegram?: {
+          WebApp?: {
+            ready: () => void;
+            expand: () => void;
+            initData?: string;
+          };
+        };
+      }
+    )?.Telegram?.WebApp;
+
+    if (!tg) {
+      setIsTelegramMiniApp(false);
+      return;
+    }
+
+    setIsTelegramMiniApp(true);
+
+    tg.ready();
+    tg.expand();
+
+    const initData = tg.initData;
+
+    if (!initData) {
+      setTelegramAuth({
+        checked: true,
+        authorized: false,
+        role: 'unauthorized',
+      });
+      return;
+    }
+
+    fetch('/api/auth/telegram-session', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        initData,
+      }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(
+            data?.error || 'Telegram authentication failed'
+          );
+        }
+
+        return data;
+      })
+      .then((data) => {
+        if (data?.authorized) {
+          setTelegramAuth({
+            checked: true,
+            authorized: true,
+            role: data.role,
+            user: data.user,
+          });
+        } else {
+          setTelegramAuth({
+            checked: true,
+            authorized: false,
+            role: data?.role || 'unpaid',
+            user: data?.user,
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('Telegram auth check error:', err);
+
+        /*
+         * IMPORTANT:
+         * Authentication failure must NOT grant access.
+         */
+        setTelegramAuth({
+          checked: true,
+          authorized: false,
+          role: 'unauthorized',
+        });
+      });
+  }, []);
+
+  /*
+   * Website User ID startup.
+   * This runs only outside Telegram Mini App.
+   */
+  useEffect(() => {
+    if (isTelegramMiniApp) {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const paymentVerify =
+      params.get('type') === 'website-user';
+
+    const remember =
+      localStorage.getItem(REMEMBER_KEY) === 'true';
+
+    setRememberMe(remember);
+
+    const savedUserId =
+      localStorage.getItem(USER_ID_KEY);
+
+    if (paymentVerify) {
+      const returnedUserId =
+        params.get('userId') || savedUserId || '';
+
+      if (!returnedUserId) {
+        setWebsiteState('login');
+        return;
+      }
+
+      setWebsiteUserId(returnedUserId);
+      setWebsiteState('payment-verifying');
+
+      fetch(
+        `/api/website/user-id/payment-verify?type=website-user&userId=${encodeURIComponent(
+          returnedUserId
+        )}`
+      )
+        .then(async (res) => {
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(
+              data?.error || 'Payment verification failed'
+            );
+          }
+
+          return data;
+        })
+        .then((data) => {
+          if (data?.authorized || data?.verified || data?.paid) {
+            if (remember) {
+              localStorage.setItem(
+                USER_ID_KEY,
+                returnedUserId
+              );
+            }
+
+            setWebsiteState('payment-success');
+
+            window.history.replaceState(
+              {},
+              '',
+              window.location.pathname
+            );
+          } else {
+            setWebsiteState('payment-failed');
+          }
+        })
+        .catch((err) => {
+          console.error(
+            'Website payment verification error:',
+            err
+          );
+
+          setWebsiteState('payment-failed');
+        });
+
+      return;
+    }
+
+    if (savedUserId && remember) {
+      setWebsiteUserId(savedUserId);
+      setWebsiteState('verifying');
+
+      fetch(
+        `/api/website/user-id/verify/${encodeURIComponent(
+          savedUserId
+        )}`
+      )
+        .then(async (res) => {
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(
+              data?.error || 'Verification failed'
+            );
+          }
+
+          return data;
+        })
+        .then((data) => {
+          if (data?.authorized || data?.verified || data?.paid) {
+            setWebsiteState('verified');
+          } else {
+            localStorage.removeItem(USER_ID_KEY);
+            setWebsiteUserId('');
+            setWebsiteState('login');
+          }
+        })
+        .catch(() => {
+          setWebsiteState('login');
+        });
+
+      return;
+    }
+
+    setWebsiteState('login');
+  }, [isTelegramMiniApp]);
+
+  /*
+   * Website User ID verification.
+   */
+  const handleWebsiteVerify = async () => {
+    const id = websiteUserId.trim();
+
+    if (!id) {
+      return;
+    }
+
+    setWebsiteState('verifying');
+
+    try {
+      const response = await fetch(
+        `/api/website/user-id/verify/${encodeURIComponent(id)}`
+      );
+
+      const data = await response.json();
+
+      if (
+        response.ok &&
+        (data?.authorized ||
+          data?.verified ||
+          data?.paid)
+      ) {
+        if (rememberMe) {
+          localStorage.setItem(
+            USER_ID_KEY,
+            id
+          );
+
+          localStorage.setItem(
+            REMEMBER_KEY,
+            'true'
+          );
+        } else {
+          localStorage.removeItem(USER_ID_KEY);
+          localStorage.setItem(
+            REMEMBER_KEY,
+            'false'
+          );
+        }
+
+        setWebsiteState('verified');
+      } else {
+        setWebsiteState('wrong');
+      }
+    } catch (error) {
+      console.error(
+        'Website User ID verification error:',
+        error
+      );
+
+      setWebsiteState('wrong');
+    }
+  };
+
+  /*
+   * Start a REAL Paystack transaction.
+   */
+  const handleWebsitePurchase = async () => {
+    setWebsiteState('purchasing');
+
+    try {
+      const response = await fetch(
+        '/api/website/user-id/purchase',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            rememberMe,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            'Unable to initialize payment'
+        );
+      }
+
+      if (!data?.authorizationUrl) {
+        throw new Error(
+          'Paystack checkout URL was not returned'
+        );
+      }
+
+      if (data?.userId) {
+        setWebsiteUserId(
+          String(data.userId)
+        );
+      }
+
+      window.location.href =
+        data.authorizationUrl;
+    } catch (error) {
+      console.error(
+        'Paystack initialization error:',
+        error
+      );
+
+      setWebsiteState('payment-failed');
+    }
+  };
+
+  /*
+            
