@@ -1,0 +1,160 @@
+{
+  "entities": {
+    "AppSetting": {
+      "title": "AppSetting",
+      "description": "User preferences and system display configurations",
+      "type": "object",
+      "properties": {
+        "soundEnabled": { "type": "boolean" },
+        "soundType": { "type": "string", "enum": ["app_base", "iphone", "samsung"] },
+        "notificationsEnabled": { "type": "boolean" },
+        "hapticEnabled": { "type": "boolean" },
+        "animationsEnabled": { "type": "boolean" },
+        "nightMode": { "type": "string", "enum": ["oled", "cockpit"] },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["soundEnabled", "soundType", "hapticEnabled", "animationsEnabled", "nightMode", "updatedAt"]
+    },
+    "Signal": {
+      "title": "Signal",
+      "description": "Live aeronautical telemetry signal cycle with timestamp-based countdown",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "multiplier": { "type": "number" },
+        "outlook": { "type": "string", "enum": ["HIGH", "NORMAL", "LOW"] },
+        "status": { "type": "string", "enum": ["MONITORING", "LOCKED", "CALCULATING", "WAITING"] },
+        "confidence": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "expiresAt": { "type": "number" },
+        "hash": { "type": "string", "maxLength": 64 },
+        "optimalExitZone": {
+          "type": "object",
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          },
+          "required": ["min", "max"]
+        }
+      },
+      "required": ["id", "multiplier", "outlook", "status", "confidence", "durationSeconds", "createdAt", "expiresAt", "hash"]
+    },
+    "SignalHistory": {
+      "title": "SignalHistory",
+      "description": "Persistent record of an archived, completed signal cycle",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "multiplier": { "type": "number" },
+        "outlook": { "type": "string", "enum": ["HIGH", "NORMAL", "LOW"] },
+        "status": { "type": "string", "maxLength": 32 },
+        "createdAt": { "type": "number" },
+        "completedAt": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "date": { "type": "string", "maxLength": 32 },
+        "time": { "type": "string", "maxLength": 32 },
+        "hash": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "multiplier", "outlook", "status", "createdAt", "completedAt", "durationSeconds", "date", "time", "hash"]
+    },
+    "DailyOutlook": {
+      "title": "DailyOutlook",
+      "description": "Day-by-day corridor altitude and outlook matrix parameters",
+      "type": "object",
+      "properties": {
+        "dayId": { "type": "string", "maxLength": 32 },
+        "dayName": { "type": "string", "maxLength": 32 },
+        "dayShort": { "type": "string", "maxLength": 16 },
+        "sublabel": { "type": "string", "maxLength": 32 },
+        "dayIndex": { "type": "number" },
+        "level": { "type": "string", "enum": ["HIGH", "NORMAL", "LOW"] },
+        "corridor": { "type": "string", "maxLength": 64 },
+        "probability": { "type": "string", "maxLength": 16 },
+        "altitude": { "type": "string", "maxLength": 32 },
+        "description": { "type": "string", "maxLength": 256 },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["dayId", "dayName", "dayShort", "dayIndex", "level", "corridor", "probability", "altitude", "description", "updatedAt"]
+    },
+    "VerifiedStat": {
+      "title": "VerifiedStat",
+      "description": "Aggregated engine telemetry performance stats",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "totalCyclesObserved": { "type": "number" },
+        "averageIntervalSeconds": { "type": "number" },
+        "sessionStartTime": { "type": "number" },
+        "volatilityIndex": { "type": "number" },
+        "seedHash": { "type": "string", "maxLength": 64 },
+        "verifiedUserCount": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "totalCyclesObserved", "averageIntervalSeconds", "sessionStartTime", "volatilityIndex", "seedHash", "updatedAt"]
+    },
+    "UserAccess": {
+      "title": "UserAccess",
+      "description": "Persistent verified Telegram user access status and activation state",
+      "type": "object",
+      "properties": {
+        "telegramUserId": { "type": "number" },
+        "telegramUsername": { "type": "string" },
+        "accessStatus": { "type": "string", "enum": ["unpaid", "payment_pending", "payment_failed", "paid_verified", "admin"] },
+        "verifiedPaymentReference": { "type": "string" },
+        "paidAt": { "type": "string" },
+        "verifiedAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["telegramUserId", "accessStatus", "updatedAt"]
+    },
+    "PaymentRecord": {
+      "title": "PaymentRecord",
+      "description": "Immutable server-verified Paystack payment transaction record",
+      "type": "object",
+      "properties": {
+        "reference": { "type": "string" },
+        "telegramUserId": { "type": "number" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string", "enum": ["NGN"] },
+        "status": { "type": "string", "enum": ["pending", "verified", "failed"] },
+        "authorizationUrl": { "type": "string" },
+        "paystackTransactionId": { "type": "number" },
+        "paidAt": { "type": "string" },
+        "verifiedAt": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["reference", "telegramUserId", "amount", "currency", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/settings/{settingId}": {
+      "schema": "AppSetting",
+      "description": "Application settings documents"
+    },
+    "/signals/{signalId}": {
+      "schema": "Signal",
+      "description": "Active real-time signal cycle documents"
+    },
+    "/signal_history/{historyId}": {
+      "schema": "SignalHistory",
+      "description": "Archived completed signal cycle history collection"
+    },
+    "/daily_outlook/{dayId}": {
+      "schema": "DailyOutlook",
+      "description": "7-day flight corridor telemetry schedule documents"
+    },
+    "/verified_stats/{statId}": {
+      "schema": "VerifiedStat",
+      "description": "Verified system performance statistics"
+    },
+    "/users/{userId}": {
+      "schema": "UserAccess",
+      "description": "Telegram user access and payment authorization records"
+    },
+    "/payments/{paymentId}": {
+      "schema": "PaymentRecord",
+      "description": "Paystack payment transaction attempt and verification records"
+    }
+  }
+}

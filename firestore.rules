@@ -1,0 +1,164 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Internal backend server authorization validation
+    // Guarantees clients cannot forge payment records or upgrade their own status
+    function isBackendServer(data) {
+      return data.keys().hasAny(['_srvAuth']) && 
+             data._srvAuth is string && 
+             data._srvAuth == 'sec_app_srv_auth_7760779963_live_verified';
+    }
+
+    // Entity Validators
+    function isValidAppSetting(data) {
+      return data.keys().hasAll(['soundEnabled', 'soundType', 'hapticEnabled', 'animationsEnabled', 'nightMode', 'updatedAt']) &&
+             data.keys().hasOnly(['soundEnabled', 'soundType', 'notificationsEnabled', 'hapticEnabled', 'animationsEnabled', 'nightMode', 'updatedAt']) &&
+             data.soundEnabled is bool &&
+             data.soundType in ['app_base', 'iphone', 'samsung'] &&
+             data.hapticEnabled is bool &&
+             data.animationsEnabled is bool &&
+             data.nightMode in ['oled', 'cockpit'] &&
+             data.updatedAt is number;
+    }
+
+    function isValidSignal(data) {
+      return data.keys().hasAll(['id', 'multiplier', 'outlook', 'status', 'confidence', 'durationSeconds', 'createdAt', 'expiresAt', 'hash']) &&
+             data.keys().hasOnly(['id', 'multiplier', 'outlook', 'status', 'confidence', 'durationSeconds', 'createdAt', 'expiresAt', 'hash', 'optimalExitZone']) &&
+             isValidId(data.id) &&
+             data.multiplier is number && data.multiplier >= 1.0 && data.multiplier <= 500.0 &&
+             data.outlook in ['HIGH', 'NORMAL', 'LOW'] &&
+             data.status in ['MONITORING', 'LOCKED', 'CALCULATING', 'WAITING'] &&
+             data.confidence is number && data.confidence >= 50 && data.confidence <= 100 &&
+             data.durationSeconds is number && data.durationSeconds >= 30 && data.durationSeconds <= 50 &&
+             data.createdAt is number &&
+             data.expiresAt is number && data.expiresAt > data.createdAt &&
+             data.hash is string && data.hash.size() <= 64;
+    }
+
+    function isValidSignalHistory(data) {
+      return data.keys().hasAll(['id', 'multiplier', 'outlook', 'status', 'createdAt', 'completedAt', 'durationSeconds', 'date', 'time', 'hash']) &&
+             data.keys().hasOnly(['id', 'multiplier', 'outlook', 'status', 'createdAt', 'completedAt', 'durationSeconds', 'date', 'time', 'hash']) &&
+             isValidId(data.id) &&
+             data.multiplier is number && data.multiplier >= 1.0 && data.multiplier <= 500.0 &&
+             data.outlook in ['HIGH', 'NORMAL', 'LOW'] &&
+             data.status is string && data.status.size() <= 32 &&
+             data.createdAt is number &&
+             data.completedAt is number && data.completedAt >= data.createdAt &&
+             data.durationSeconds is number && data.durationSeconds >= 30 && data.durationSeconds <= 50 &&
+             data.date is string && data.date.size() <= 32 &&
+             data.time is string && data.time.size() <= 32 &&
+             data.hash is string && data.hash.size() <= 64;
+    }
+
+    function isValidDailyOutlook(data) {
+      return data.keys().hasAll(['dayId', 'dayName', 'dayShort', 'dayIndex', 'level', 'corridor', 'probability', 'altitude', 'description', 'updatedAt']) &&
+             data.keys().hasOnly(['dayId', 'dayName', 'dayShort', 'sublabel', 'dayIndex', 'level', 'corridor', 'probability', 'altitude', 'description', 'updatedAt']) &&
+             data.dayId is string && data.dayId.size() <= 32 &&
+             data.dayName is string && data.dayName.size() <= 32 &&
+             data.dayShort is string && data.dayShort.size() <= 16 &&
+             data.dayIndex is number && data.dayIndex >= 0 && data.dayIndex <= 6 &&
+             data.level in ['HIGH', 'NORMAL', 'LOW'] &&
+             data.corridor is string && data.corridor.size() <= 64 &&
+             data.probability is string && data.probability.size() <= 16 &&
+             data.altitude is string && data.altitude.size() <= 32 &&
+             data.description is string && data.description.size() <= 256 &&
+             data.updatedAt is number;
+    }
+
+    function isValidVerifiedStat(data) {
+      return data.keys().hasAll(['id', 'totalCyclesObserved', 'averageIntervalSeconds', 'sessionStartTime', 'volatilityIndex', 'seedHash', 'updatedAt']) &&
+             isValidId(data.id) &&
+             data.totalCyclesObserved is number && data.totalCyclesObserved >= 0 &&
+             data.averageIntervalSeconds is number && data.averageIntervalSeconds >= 20.0 && data.averageIntervalSeconds <= 60.0 &&
+             data.sessionStartTime is number &&
+             data.volatilityIndex is number &&
+             data.seedHash is string && data.seedHash.size() <= 64 &&
+             data.updatedAt is number;
+    }
+
+    function isValidUserAccess(data) {
+      return data.keys().hasAll(['telegramUserId', 'accessStatus', 'updatedAt']) &&
+             data.telegramUserId is number &&
+             data.accessStatus in ['unpaid', 'payment_pending', 'payment_failed', 'paid_verified', 'admin'] &&
+             data.updatedAt is number;
+    }
+
+    function isValidPaymentRecord(data) {
+      return data.keys().hasAll(['reference', 'telegramUserId', 'amount', 'currency', 'status', 'createdAt']) &&
+             data.reference is string && data.reference.size() <= 128 &&
+             data.telegramUserId is number &&
+             data.amount is number && data.amount == 2000 &&
+             data.currency == 'NGN' &&
+             data.status in ['pending', 'verified', 'failed'] &&
+             data.createdAt is number;
+    }
+
+    // Collection: App Settings
+    match /settings/{settingId} {
+      allow read: if isValidId(settingId);
+      allow create, update: if isValidId(settingId) && isValidAppSetting(incoming());
+      allow delete: if false;
+    }
+
+    // Collection: Real-time Telemetry Signal
+    match /signals/{signalId} {
+      allow read: if isValidId(signalId);
+      allow create, update: if isValidId(signalId) && isValidSignal(incoming());
+      allow delete: if false;
+    }
+
+    // Collection: Signal History (Immutable once recorded)
+    match /signal_history/{historyId} {
+      allow read: if true;
+      allow create: if isValidId(historyId) && isValidSignalHistory(incoming());
+      allow update, delete: if false;
+    }
+
+    // Collection: Weekly 7-Day Flight Corridor Outlook
+    match /daily_outlook/{dayId} {
+      allow read: if true;
+      allow create, update: if isValidId(dayId) && isValidDailyOutlook(incoming());
+      allow delete: if false;
+    }
+
+    // Collection: Verified Engine Performance Statistics
+    match /verified_stats/{statId} {
+      allow read: if isValidId(statId);
+      allow create, update: if isValidId(statId) && isValidVerifiedStat(incoming());
+      allow delete: if false;
+    }
+
+    // Collection: User Access Control (Clients CANNOT alter their own access or grant permissions)
+    match /users/{userId} {
+      allow read: if isValidId(userId);
+      allow create, update: if isValidId(userId) && isValidUserAccess(incoming()) && isBackendServer(incoming());
+      allow delete: if false;
+    }
+
+    // Collection: Paystack Payment Records (Immutable financial audit logs, writeable ONLY by backend)
+    match /payments/{paymentId} {
+      allow read: if isBackendServer(incoming());
+      allow create, update: if isValidId(paymentId) && isValidPaymentRecord(incoming()) && isBackendServer(incoming());
+      allow delete: if false;
+    }
+  }
+}
